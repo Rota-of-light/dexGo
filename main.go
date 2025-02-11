@@ -8,6 +8,8 @@ import (
     "net/http"
     "encoding/json"
     "io"
+    "time"
+    "github.com/Rota-of-light/dexGo/internal/pokecache"
 )
 
 type cliCommand struct {
@@ -19,6 +21,7 @@ type cliCommand struct {
 type Config struct {
     Next     *string
     Previous *string
+    cache *pokecache.Cache
 }
 
 type Respond struct {
@@ -58,19 +61,27 @@ func commandMap(cfg *Config) error {
     } else {
         httpString = *cfg.Next
     }
-    res, err := http.Get(httpString)
-    if err != nil {
-		return err
-	}
-    defer res.Body.Close()
-    
-    body, err := io.ReadAll(res.Body)
-	if err != nil {
-		return err
-	}
+    if cachedData, found := cfg.cache.Get(httpString); found {
+        if err := json.Unmarshal(cachedData, &response); err != nil {
+            return err
+        }
+    } else {
+        res, err := http.Get(httpString)
+        if err != nil {
+            return err
+        }
+        defer res.Body.Close()
+        
+        body, err := io.ReadAll(res.Body)
+        if err != nil {
+            return err
+        }
+        
+        cfg.cache.Add(httpString, body)
 
-    if err := json.Unmarshal(body, &response); err != nil {
-        return err
+        if err := json.Unmarshal(body, &response); err != nil {
+            return err
+        }
     }
     for _, area := range response.Results {
         fmt.Printf("%v\n", area.Name)
@@ -89,21 +100,28 @@ func commandMapb(cfg *Config) error {
         return nil
     }
     httpString = *cfg.Previous
-    res, err := http.Get(httpString)
-    if err != nil {
-		return err
-	}
-    defer res.Body.Close()
-    
-    body, err := io.ReadAll(res.Body)
-	if err != nil {
-		return err
-	}
+    if cachedData, found := cfg.cache.Get(httpString); found {
+        if err := json.Unmarshal(cachedData, &response); err != nil {
+            return err
+        }
+    } else {
+        res, err := http.Get(httpString)
+        if err != nil {
+            return err
+        }
+        defer res.Body.Close()
+        
+        body, err := io.ReadAll(res.Body)
+        if err != nil {
+            return err
+        }
+                
+        cfg.cache.Add(httpString, body)
 
-    if err := json.Unmarshal(body, &response); err != nil {
-        return err
+        if err := json.Unmarshal(body, &response); err != nil {
+            return err
+        }
     }
-    
     for _, area := range response.Results {
         fmt.Printf("%v\n", area.Name)
     }
@@ -121,6 +139,7 @@ func main() {
     config := Config{
         Next: nil,
         Previous: nil,
+        cache: pokecache.NewCache(5 * time.Minute),
     }
     commands = map[string]cliCommand{
         "help": {
