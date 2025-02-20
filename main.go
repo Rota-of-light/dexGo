@@ -9,6 +9,7 @@ import (
     "encoding/json"
     "io"
     "time"
+    "math/rand"
     "github.com/Rota-of-light/dexGo/internal/pokecache"
 )
 
@@ -87,6 +88,28 @@ type Encounters struct {
 	} `json:"pokemon_encounters"`
 }
 
+type Pokemon struct {
+    Name           string `json:"name"`
+    BaseExperience int    `json:"base_experience"`
+    Height         int    `json:"height"`
+    Weight         int    `json:"weight"`
+    Stats []struct {
+        BaseStat int `json:"base_stat"`
+        Effort   int `json:"effort"`
+        Stat     struct {
+            Name string `json:"name"`
+            URL  string `json:"url"` 
+        } `json:"stat"`
+    } `json:"stats"`
+    Types []struct {
+        Slot int `json:"slot"`
+        Type struct {
+            Name string `json:"name"`
+            URL  string `json:"url"`
+        } `json:"type"`
+    } `json:"types"`
+}
+
 func commandExit(cfg *Config, locate string) error {
     fmt.Println("Closing the Pokedex... Goodbye!")
     os.Exit(0)
@@ -94,6 +117,8 @@ func commandExit(cfg *Config, locate string) error {
 }
 
 var commands map[string]cliCommand
+
+var caughtPkmons map[string]Pokemon
 
 func commandHelp(cfg *Config, locate string) error {
     fmt.Println("Welcome to the Pokedex!")
@@ -195,11 +220,11 @@ func commandExplore(cfg *Config, locate string) error {
         }
     } else {
         res, err := http.Get(httpString)
-        if res.StatusCode != 200 {
-            return fmt.Errorf("Location area '%s' not found", locate)
-        }
         if err != nil {
             return err
+        }
+        if res.StatusCode != 200 {
+            return fmt.Errorf("Location area '%s' not found", locate)
         }
         defer res.Body.Close()
         
@@ -222,6 +247,96 @@ func commandExplore(cfg *Config, locate string) error {
     return nil
 }
 
+func commandCatch(cfg *Config, pkmon string) error {
+    var response Pokemon
+    if pkmon == "" {
+        fmt.Println("No Pokemon name given.")
+        return nil
+    }
+    if _, exist := caughtPkmons[pkmon]; exist {
+        fmt.Println("Pokemon already caught.")
+        return nil
+    }
+    httpString := "https://pokeapi.co/api/v2/pokemon/" + pkmon
+    res, err := http.Get(httpString)
+    if err != nil {
+        return err
+    }
+    if res.StatusCode != 200 {
+        return fmt.Errorf("Pokemon named '%s' not found", pkmon)
+    }
+    defer res.Body.Close()
+    
+    body, err := io.ReadAll(res.Body)
+    if err != nil {
+        return err
+    }
+    if err := json.Unmarshal(body, &response); err != nil {
+        return err
+    }
+    fmt.Println("Throwing a Pokeball at " + pkmon + "...")
+    catchRate := 100 - (response.BaseExperience / 3)
+    if catchRate <= 5 {
+        catchRate = 5
+    }
+    rand.Seed(time.Now().UnixNano())
+    rollResult := rand.Intn(101)
+    if rollResult <= catchRate {
+        fmt.Println(pkmon + " was caught!")
+        caughtPkmons[response.Name] = response
+        return nil
+    }
+    fmt.Println(pkmon + " escaped!")
+    return nil
+}
+
+func commandInspect(cfg *Config, pkmon string) error {
+    if pkmon == "" {
+        fmt.Println("No Pokemon name given.")
+        return nil
+    }
+    if _, exist := caughtPkmons[pkmon]; exist == false {
+        fmt.Println("you have not caught that pokemon.")
+        return nil
+    }
+    pokemon := caughtPkmons[pkmon]
+    statsMap := make(map[string]int)
+    for _, stat := range pokemon.Stats {
+        statsMap[stat.Stat.Name] = stat.BaseStat
+    }
+    typeMap := make(map[int]string)
+    for _, t := range pokemon.Types {
+        typeMap[t.Slot] = t.Type.Name
+    }
+    fmt.Printf("Name: %v\n", pokemon.Name)
+    fmt.Printf("Height: %d\n", pokemon.Height)
+    fmt.Printf("Weight: %d\n", pokemon.Weight)
+    fmt.Println("Stats:")
+    fmt.Printf("  -hp: %d\n", statsMap["hp"])
+    fmt.Printf("  -attack: %d\n", statsMap["attack"])
+    fmt.Printf("  -defense: %d\n", statsMap["defense"])
+    fmt.Printf("  -special-attack: %d\n", statsMap["special-attack"])
+    fmt.Printf("  -special-defense: %d\n", statsMap["special-defense"])
+    fmt.Printf("  -speed: %d\n", statsMap["speed"])
+    fmt.Println("Types:")
+    fmt.Printf("  - %v\n", typeMap[1])
+    if len(typeMap) > 1 {
+        fmt.Printf("  - %v\n", typeMap[2])
+    }
+    return nil
+}
+
+func commandPokedex(cfg *Config, locate string) error {
+    fmt.Println("Your Pokedex:")
+    if len(caughtPkmons) == 0 {
+        return nil
+    }
+    for _, pkmon := range caughtPkmons {
+        fmt.Printf(" - %v\n", pkmon.Name)
+    }
+    return nil
+}
+
 func cleanInput(test string) []string {
     return strings.Fields(strings.ToLower(test))
 } 
@@ -232,6 +347,7 @@ func main() {
         Previous: nil,
         cache: pokecache.NewCache(5 * time.Minute),
     }
+    caughtPkmons = map[string]Pokemon{}
     commands = map[string]cliCommand{
         "help": {
             name:        "help",
@@ -257,6 +373,21 @@ func main() {
             name:        "explore",
             description: "Displays a location's pokemon",
             callback:    commandExplore,
+        },
+        "catch": {
+            name:        "catch",
+            description: "catch a pokemon",
+            callback:    commandCatch,
+        },
+        "inspect": {
+            name:        "inspect",
+            description: "inspect captured pokemon",
+            callback:    commandInspect,
+        },
+        "pokedex": {
+            name:        "pokedex",
+            description: "show all captured pokemon",
+            callback:    commandPokedex,
         },
     }
     scanner := bufio.NewScanner(os.Stdin)
